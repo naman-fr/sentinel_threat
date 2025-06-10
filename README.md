@@ -1,3 +1,45 @@
+<!--
+ __          __  _                            _             
+ \ \        / / | |                          | |            
+  \ \  /\  / /__| | ___ ___  _ __ ___   ___  | |_ ___       
+   \ \/  \/ / _ \ |/ __/ _ \| '_ ` _ \ / _ \ | __/ _ \      
+    \  /\  /  __/ | (_| (_) | | | | | |  __/ | || (_) |     
+     \/  \/ \___|_|\___\___/|_| |_| |_|\___|  \__\___/      
+                                                            
+      _____ _                   _   _   _                 
+     / ____| |                 | | | | (_)                
+    | (___ | |_ _ __ _   _  ___| |_| |_ _ _ __   __ _ ___ 
+     \___ \| __| '__| | | |/ __| __| __| | '_ \ / _` / __|
+     ____) | |_| |  | |_| | (__| |_| |_| | | | | (_| \__ \
+    |_____/ \__|_|   \__,_|\___|\__|\__|_|_| |_|\__, |___/
+                                                __/ |    
+                                               |___/     
+-->
+
+<div align="center">
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)  
+[![CI](https://github.com/yourorg/sentinel_threat/workflows/CI/badge.svg)](https://github.com/yourorg/sentinel_threat/actions)  
+[![Kafka](https://img.shields.io/badge/Powered%20by-Apache%20Kafka-231F20?logo=apachekafka)](https://kafka.apache.org/)  
+[![Redis](https://img.shields.io/badge/Cache-Redis-DC382D?logo=redis)](https://redis.io/)  
+[![Streamlit](https://img.shields.io/badge/Dashboard-Streamlit-FF4B4B?logo=streamlit)](https://streamlit.io/)  
+[![TensorFlow](https://img.shields.io/badge/ML-TensorFlow-FF6F00?logo=tensorflow)](https://www.tensorflow.org/)  
+
+<h1>Sentinel Threat Detection System</h1>
+<p><em>🚀 Real-time, distributed threat detection with Machine Learning & Sensor Fusion</em></p>
+
+<a href="https://github.com/yourorg/sentinel_threat/stargazers"><img src="https://img.shields.io/github/stars/yourorg/sentinel_threat?style=social" alt="GitHub stars" /></a>
+<a href="https://github.com/yourorg/sentinel_threat/issues"><img src="https://img.shields.io/github/issues/yourorg/sentinel_threat" alt="GitHub issues" /></a>
+<a href="#-support">Support</a> •
+<a href="#-getting-started">Getting Started</a> •
+<a href="#-architecture-overview">Architecture</a> •
+<a href="#-features">Features</a> •
+<a href="#-dashboard-screenshots">Screenshots</a> •
+<a href="#-contributing">Contributing</a>
+
+</div>
+
+---
 # 🛡️ Sentinel Threat Detection System
 
 A real-time, distributed threat detection system that leverages machine learning and sensor fusion to identify and respond to security threats.
