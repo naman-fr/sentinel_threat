@@ -13,6 +13,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from collections import deque
 from typing import Dict, Deque, Any, Optional
+import os
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -30,15 +31,9 @@ class ThreatDashboard:
         self.message_queue = queue.Queue()
 
     async def initialize_connections(self):
-        """Initialize Redis connection. Kafka consumer will be initialized in its own thread."""
+        """Initialize dashboard connections (excluding Redis, now in consumer thread)."""
         logger.info("Initializing dashboard connections...")
-        try:
-            self.redis = await redis.from_url(self.redis_url)
-            await self.redis.ping()
-            logger.info("Redis connection successful.")
-        except Exception as e:
-            logger.error(f"Failed to connect to Redis: {e}")
-            raise
+        # Redis initialization moved to _kafka_consumer_thread_target
         logger.info("Successfully initialized dashboard connections")
 
     def _kafka_consumer_thread_target(self):
@@ -48,6 +43,15 @@ class ThreatDashboard:
         self._consumer_loop = loop # Store the loop instance
 
         async def run_consumer_loop_async():
+            # Initialize Redis connection within this thread's event loop
+            try:
+                self.redis = await redis.from_url(self.redis_url)
+                await self.redis.ping()
+                logger.info("Redis connection successful within consumer thread.")
+            except Exception as e:
+                logger.error(f"Failed to connect to Redis in consumer thread: {e}")
+                # This exception needs to be handled gracefully to not stop the consumer thread
+
             self.consumer = AIOKafkaConsumer(
                 'threat_detection',
                 bootstrap_servers=self.kafka_bootstrap_servers,
@@ -90,6 +94,14 @@ class ThreatDashboard:
                         logger.info("Kafka consumer stopped.")
                     except Exception as e:
                         logger.error(f"Error stopping consumer in thread: {e}")
+                
+                if self.redis:
+                    try:
+                        await self.redis.aclose()
+                        logger.info("Redis connection closed in consumer thread.")
+                    except Exception as e:
+                        logger.error(f"Error closing Redis in consumer thread: {e}")
+                
                 # The loop will be closed outside this async function.
 
         try:
@@ -111,7 +123,7 @@ class ThreatDashboard:
         self._consumer_thread.start()
         logger.info("Kafka consumer thread initiated.")
 
-    async def stop(self):
+    def stop(self):
         """Stop the dashboard and cleanup resources"""
         logger.info("Stopping dashboard...")
         self._stop_event.set()
@@ -121,12 +133,14 @@ class ThreatDashboard:
             if self._consumer_thread.is_alive():
                 logger.warning("Consumer thread did not terminate gracefully within timeout.")
 
-        if self.redis:
-            try:
-                await self.redis.aclose()
-                logger.info("Redis connection closed.")
-            except Exception as e:
-                logger.error(f"Error closing Redis connection: {e}")
+        # Redis cleanup is now handled in _kafka_consumer_thread_target's finally block
+        # if self.redis:
+        #     try:
+        #         # No need to ping, just attempt to close if it exists
+        #         await self.redis.aclose()
+        #         logger.info("Redis connection closed.")
+        #     except Exception as e:
+        #         logger.error(f"Error closing Redis connection: {e}")
         
         logger.info("Dashboard stopped.")
 
@@ -141,13 +155,13 @@ class ThreatDashboard:
             col1, col2, col3, col4 = st.columns(4)
             
             with col1:
-                self._render_threat_count()
+                self._render_threat_count(col1)
             with col2:
-                self._render_severity_metrics()
+                self._render_severity_metrics(col2)
             with col3:
-                self._render_response_time()
+                self._render_response_time(col3)
             with col4:
-                self._render_system_health()
+                self._render_system_health(col4)
             
             # Main content
             col_left, col_right = st.columns([2, 1])
@@ -164,70 +178,23 @@ class ThreatDashboard:
             logger.error(f"Error rendering dashboard: {e}")
             st.error("Error rendering dashboard. Please check logs for details.")
     
-    def _render_threat_count(self):
+    def _render_threat_count(self, parent_col):
         """Render threat count metrics"""
         try:
-            col1, col2, col3, col4 = st.columns(4)
-            
-            with col1:
+            with parent_col:
                 st.metric(
                     label="Active Threats",
                     value=len(st.session_state.get('alerts', [])),
-                    delta=None
-                )
-            
-            with col2:
-                avg_severity = np.mean([a['severity'] for a in st.session_state.get('alerts', [])]) if st.session_state.get('alerts') else 0
-                st.metric(
-                    label="Avg Severity",
-                    value=f"{avg_severity:.2f}",
-                    delta=None
-                )
-            
-            with col3:
-                avg_confidence = np.mean([a['confidence'] for a in st.session_state.get('alerts', [])]) if st.session_state.get('alerts') else 0
-                st.metric(
-                    label="Avg Confidence",
-                    value=f"{avg_confidence:.2f}",
-                    delta=None
-                )
-            
-            with col4:
-                is_consumer_active = st.session_state.dashboard._consumer_thread and st.session_state.dashboard._consumer_thread.is_alive()
-                st.metric(
-                    label="System Status",
-                    value="Active" if is_consumer_active else "Inactive",
                     delta=None
                 )
         except Exception as e:
             logger.error(f"Error rendering threat count: {e}")
             st.error("Error displaying metrics")
     
-    def _render_severity_metrics(self):
+    def _render_severity_metrics(self, parent_col):
         """Render threat severity metrics"""
-        self._render_health_gauges()
-    
-    def _render_response_time(self):
-        """Render response time metrics"""
-        response_times = self._get_response_times()
-        st.metric(
-            label="Avg Response Time",
-            value=f"{response_times['average']:.2f}s",
-            delta=f"{response_times['delta']:.2f}s"
-        )
-    
-    def _render_system_health(self):
-        """Render system health metrics"""
-        self._render_health_gauges()
-    
-    def _render_health_gauges(self):
-        col1, col2 = st.columns(2)
-        
         avg_severity = np.mean([a['severity'] for a in st.session_state.get('alerts', [])]) if st.session_state.get('alerts') else 0
-        # Dynamically determine system health value - for now, tied to consumer activity
-        system_health_value = 100 if (st.session_state.dashboard._consumer_thread and st.session_state.dashboard._consumer_thread.is_alive()) else 0
-
-        with col1:
+        with parent_col:
             fig_severity = go.Figure(go.Indicator(
                 mode="gauge+number",
                 value=avg_severity,
@@ -251,9 +218,22 @@ class ThreatDashboard:
                 }
             ))
             fig_severity.update_layout(margin=dict(l=20, r=20, t=30, b=30))
-            st.plotly_chart(fig_severity, use_container_width=True)
-
-        with col2:
+            st.plotly_chart(fig_severity, use_container_width=True, key='threat_severity_gauge_chart')
+    
+    def _render_response_time(self, parent_col):
+        """Render response time metrics"""
+        response_times = self._get_response_times()
+        with parent_col:
+            st.metric(
+                label="Avg Response Time",
+                value=f"{response_times['average']:.2f}s",
+                delta=f"{response_times['delta']:.2f}s"
+            )
+    
+    def _render_system_health(self, parent_col):
+        """Render system health metrics"""
+        system_health_value = 100 if (self._consumer_thread and self._consumer_thread.is_alive()) else 0
+        with parent_col:
             fig_health = go.Figure(go.Indicator(
                 mode="gauge+number",
                 value=system_health_value,
@@ -278,18 +258,30 @@ class ThreatDashboard:
                 }
             ))
             fig_health.update_layout(margin=dict(l=20, r=20, t=30, b=30))
-            st.plotly_chart(fig_health, use_container_width=True)
+            st.plotly_chart(fig_health, use_container_width=True, key='system_health_gauge_chart')
     
     def _render_threat_map(self):
         """Render threat map"""
         try:
             df = self._get_threat_locations()
             if not df.empty:
-                fig = px.scatter_geo(df, lat='latitude', lon='longitude',
-                                    color='severity', size='confidence',
-                                    hover_name='type', title='Threat Locations',
-                                    color_continuous_scale='Viridis',
-                                    key='threat_map')  # Add unique key
+                fig = px.scatter_geo(df, 
+                                   lat='latitude', 
+                                   lon='longitude',
+                                   color='severity', 
+                                   size='confidence',
+                                   hover_name='type', 
+                                   title='Threat Locations',
+                                   color_continuous_scale='Viridis',
+                                   projection='natural earth')
+                fig.update_layout(
+                    geo=dict(
+                        showland=True,
+                        landcolor='rgb(243, 243, 243)',
+                        countrycolor='rgb(204, 204, 204)',
+                    ),
+                    margin=dict(l=0, r=0, t=30, b=0)
+                )
                 st.plotly_chart(fig, use_container_width=True)
             else:
                 st.info("No threat data available for map visualization.")
@@ -302,9 +294,26 @@ class ThreatDashboard:
         try:
             df = self._get_timeline_data()
             if not df.empty:
-                fig = px.line(df, x='timestamp', y='severity',
-                             color='type', title='Threat Severity Over Time',
-                             key='threat_timeline')  # Add unique key
+                # Convert timestamp strings to datetime objects
+                df['timestamp'] = pd.to_datetime(df['timestamp'])
+                
+                # Sort by timestamp
+                df = df.sort_values('timestamp')
+                
+                fig = px.line(df, 
+                             x='timestamp', 
+                             y='severity',
+                             color='type', 
+                             title='Threat Severity Over Time',
+                             labels={'timestamp': 'Time', 'severity': 'Severity', 'type': 'Threat Type'})
+                
+                fig.update_layout(
+                    xaxis_title="Time",
+                    yaxis_title="Severity",
+                    legend_title="Threat Type",
+                    hovermode='x unified'
+                )
+                
                 st.plotly_chart(fig, use_container_width=True)
             else:
                 st.info("No threat data available for timeline visualization.")
@@ -321,14 +330,14 @@ class ThreatDashboard:
             return
             
         for alert in st.session_state.alerts:
-            with st.expander(f"Alert: {alert['type']}"):
+            with st.expander(f"Alert: {alert['type']} - {alert['id']}"):
                 st.write(f"ID: {alert['id']}")
                 st.write(f"Severity: {alert['severity']:.2f}")
                 st.write(f"Confidence: {alert['confidence']:.2f}")
                 st.write(f"Location: {alert['location']}")
                 st.write(f"Time: {alert['timestamp']}")
                 
-                if st.button("Acknowledge", key=alert['id']):
+                if st.button("Acknowledge", key=f"ack_{alert['id']}"):
                     self._acknowledge_alert(alert['id'])
     
     def _render_threat_details(self):
@@ -359,6 +368,20 @@ class ThreatDashboard:
             for action in threat_data['recommended_actions']:
                 st.write(f"- {action}")
     
+    def _render_confidence_metric(self, parent_col):
+        """Render average confidence metric"""
+        try:
+            avg_confidence = np.mean([a['confidence'] for a in st.session_state.get('alerts', [])]) if st.session_state.get('alerts') else 0
+            with parent_col:
+                st.metric(
+                    label="Avg Confidence",
+                    value=f"{avg_confidence:.2f}",
+                    delta=None
+                )
+        except Exception as e:
+            logger.error(f"Error rendering average confidence: {e}")
+            st.error("Error displaying confidence metric")
+    
     def _calculate_threat_delta(self) -> int:
         """Calculate change in threat count"""
         if len(st.session_state.threat_history) < 2:
@@ -378,15 +401,21 @@ class ThreatDashboard:
         }
     
     def _get_response_times(self) -> Dict:
-        """Get response time metrics"""
-        if not st.session_state.threat_history:
-            return {'average': 0, 'delta': 0}
+        """Calculate and return response time metrics"""
+        if not st.session_state.get('response_times_history'):
+            return {'average': 0.0, 'delta': 0.0}
+
+        response_times = list(st.session_state.response_times_history)
         
-        response_times = [t['response_time'] for t in st.session_state.threat_history]
-        return {
-            'average': np.mean(response_times),
-            'delta': np.mean(response_times[-5:]) - np.mean(response_times[-10:-5]) if len(response_times) >= 10 else 0
-        }
+        current_average = np.mean(response_times) if response_times else 0.0
+        
+        # Simple delta calculation: change from previous average if enough data
+        delta = 0.0
+        if len(response_times) > 1:
+            previous_average = np.mean(response_times[:-1]) # Average of all but the last one
+            delta = current_average - previous_average
+            
+        return {'average': current_average, 'delta': delta}
     
     def _get_system_health(self) -> Dict:
         """Get system health metrics"""
@@ -406,7 +435,7 @@ class ThreatDashboard:
                 'longitude': [],
                 'severity': [],
                 'confidence': [],
-                'threat_type': [],
+                'type': [],
                 'timestamp': []
             })
         
@@ -416,7 +445,7 @@ class ThreatDashboard:
                 'longitude': alert['location']['longitude'],
                 'severity': alert['severity'],
                 'confidence': alert['confidence'],
-                'threat_type': alert['type'],
+                'type': alert['type'],
                 'timestamp': alert['timestamp']
             } for alert in st.session_state.alerts])
             
@@ -429,65 +458,58 @@ class ThreatDashboard:
                 'longitude': [],
                 'severity': [],
                 'confidence': [],
-                'threat_type': [],
+                'type': [],
                 'timestamp': []
             })
     
     def _get_timeline_data(self) -> pd.DataFrame:
         """Get threat timeline data"""
-        if not st.session_state.threat_history:
+        if not st.session_state.alerts:
             return pd.DataFrame({
                 'timestamp': [],
-                'count': [],
-                'threat_type': []
+                'severity': [],
+                'type': []
             })
             
         try:
-            # Group threats by type and timestamp
-            threats_by_type = {}
-            for history in st.session_state.threat_history:
-                for alert in history['alerts']:
-                    threat_type = alert['type']
-                    if threat_type not in threats_by_type:
-                        threats_by_type[threat_type] = []
-                    threats_by_type[threat_type].append(history['timestamp'])
+            # Create DataFrame from alerts
+            df = pd.DataFrame([{
+                'timestamp': alert['timestamp'],
+                'severity': alert['severity'],
+                'type': alert['type']
+            } for alert in st.session_state.alerts])
             
-            # Create DataFrame
-            data = []
-            for threat_type, timestamps in threats_by_type.items():
-                for timestamp in timestamps:
-                    data.append({
-                        'timestamp': timestamp,
-                        'count': 1,
-                        'threat_type': threat_type
-                    })
+            # Convert timestamp strings to datetime objects
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
             
-            return pd.DataFrame(data)
+            # Sort by timestamp
+            df = df.sort_values('timestamp')
+            
+            return df
         except Exception as e:
             logger.error(f"Error creating timeline data: {e}")
             return pd.DataFrame({
                 'timestamp': [],
-                'count': [],
-                'threat_type': []
+                'severity': [],
+                'type': []
             })
     
     def _get_threat_details(self, threat_id: str) -> Dict:
         """Get detailed threat information"""
         # Find the threat in history
         for history in st.session_state.threat_history:
-            for alert in history['alerts']:
-                if alert['id'] == threat_id:
-                    return {
-                        'type': alert['type'],
-                        'severity': alert['severity'],
-                        'confidence': alert['confidence'],
-                        'behavioral_analysis': f"Analysis of {alert['type']} threat with severity {alert['severity']}",
-                        'recommended_actions': [
-                            "Monitor affected systems",
-                            "Review security logs",
-                            "Update threat signatures"
-                        ]
-                    }
+            if history.get('id') == threat_id:
+                return {
+                    'type': history.get('type', 'Unknown'),
+                    'severity': history.get('severity', 0),
+                    'confidence': history.get('confidence', 0),
+                    'behavioral_analysis': f"Analysis of {history.get('type', 'Unknown')} threat with severity {history.get('severity', 0)}",
+                    'recommended_actions': [
+                        "Monitor affected systems",
+                        "Review security logs",
+                        "Update threat signatures"
+                    ]
+                }
         return {
             'type': 'Unknown',
             'severity': 0,
@@ -500,6 +522,50 @@ class ThreatDashboard:
         """Acknowledge and handle alert"""
         st.session_state.alerts = [a for a in st.session_state.alerts if a['id'] != alert_id]
         st.rerun()
+
+    def _process_message(self, message):
+        """Process a single message from the queue"""
+        try:
+            # Add task ID if not present
+            if 'task_id' not in message:
+                message['task_id'] = f"task_{int(time.time() * 1000)}"
+            
+            # Add message to alerts
+            st.session_state.alerts.append(message)
+            
+            # Keep only last 100 alerts
+            if len(st.session_state.alerts) > 100:
+                st.session_state.alerts = deque(list(st.session_state.alerts)[-100:])
+            
+            # Add to threat history
+            st.session_state.threat_history.append({
+                'id': message.get('id', f"threat_{int(time.time() * 1000)}"),
+                'task_id': message['task_id'],
+                'timestamp': message.get('timestamp', pd.Timestamp.now().isoformat()),
+                'type': message.get('type', 'Unknown'),
+                'severity': message.get('severity', 0.0),
+                'confidence': message.get('confidence', 0.0),
+                'location': message.get('location', {})
+            })
+            
+            # Keep only last 1000 history entries
+            if len(st.session_state.threat_history) > 1000:
+                st.session_state.threat_history = deque(list(st.session_state.threat_history)[-1000:])
+            
+            # Calculate and store response times
+            if len(st.session_state.threat_history) > 1:
+                current_timestamp = pd.to_datetime(message.get('timestamp', pd.Timestamp.now().isoformat()))
+                previous_threat = st.session_state.threat_history[-2]
+                previous_timestamp = pd.to_datetime(previous_threat.get('timestamp', pd.Timestamp.now().isoformat()))
+                response_time = (current_timestamp - previous_timestamp).total_seconds()
+                st.session_state.response_times_history.append(response_time)
+            
+            logger.info(f"Processed message with task_id: {message['task_id']}")
+            return True
+        
+        except Exception as e:
+            logger.error(f"Error processing message: {e}")
+            return False
 
 def main():
     """Main entry point for the Streamlit dashboard"""
@@ -514,36 +580,26 @@ def main():
         # Initialize session state
         if 'initialized' not in st.session_state:
             st.session_state.initialized = False
-            st.session_state.alerts = []
-            st.session_state.threat_history = []
+            st.session_state.alerts = deque(maxlen=100)
+            st.session_state.threat_history = deque(maxlen=1000)
+            st.session_state.response_times_history = deque(maxlen=100)
             st.session_state.dashboard = None
         
         # Initialize dashboard if not already done
         if not st.session_state.initialized or st.session_state.dashboard is None:
             try:
-                # Create new event loop for initialization
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                
-                # Initialize dashboard
                 dashboard = ThreatDashboard(
-                    kafka_bootstrap_servers=['localhost:9092'],
-                    redis_url='redis://localhost'
+                    kafka_bootstrap_servers=["localhost:9092"],
+                    redis_url="redis://localhost"
                 )
-                loop.run_until_complete(dashboard.initialize_connections())
                 st.session_state.dashboard = dashboard
                 st.session_state.initialized = True
-                
-                # Start Kafka consumer
                 dashboard.start_kafka_consumer()
-                
                 logger.info("Dashboard initialized successfully")
             except Exception as e:
                 logger.error(f"Failed to initialize dashboard: {e}")
                 st.error("Failed to initialize dashboard. Please check logs for details.")
                 return
-            finally:
-                loop.close()
         
         # Process messages from the queue
         current_dashboard = st.session_state.dashboard
@@ -553,23 +609,8 @@ def main():
         while not current_dashboard.message_queue.empty():
             try:
                 message = current_dashboard.message_queue.get_nowait()
-                # Add message to alerts
-                st.session_state.alerts.append(message)
-                # Keep only last 100 alerts
-                if len(st.session_state.alerts) > 100:
-                    st.session_state.alerts = st.session_state.alerts[-100:]
-                
-                # Add to threat history
-                st.session_state.threat_history.append({
-                    'timestamp': message['timestamp'],
-                    'alerts': [message]
-                })
-                # Keep only last 1000 history entries
-                if len(st.session_state.threat_history) > 1000:
-                    st.session_state.threat_history = st.session_state.threat_history[-1000:]
-                
-                messages_processed_this_run = True
-                logger.info(f"Processed message: {message}")
+                if current_dashboard._process_message(message):
+                    messages_processed_this_run = True
             except queue.Empty:
                 break
             except Exception as e:
@@ -585,35 +626,10 @@ def main():
         # If new messages were processed, force a rerun to update the UI
         if messages_processed_this_run:
             st.rerun()
-        
+            
     except Exception as e:
         logger.error(f"Main error: {e}")
         st.error("An error occurred. Please check logs for details.")
-    finally:
-        if st.session_state.initialized and hasattr(st.session_state, 'dashboard') and st.session_state.dashboard is not None:
-            try:
-                # Signal the background thread to stop
-                if st.session_state.dashboard._stop_event:
-                    st.session_state.dashboard._stop_event.set()
-                # Wait for the background thread to finish its cleanup
-                if st.session_state.dashboard._consumer_thread and st.session_state.dashboard._consumer_thread.is_alive():
-                    st.session_state.dashboard._consumer_thread.join(timeout=10)
-                # Attempt to close Redis, if it's still open and its aclose() is async.
-                if st.session_state.dashboard.redis:
-                    # Create and run a temporary event loop for this specific async Redis operation
-                    try:
-                        temp_loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(temp_loop)
-                        temp_loop.run_until_complete(st.session_state.dashboard.redis.aclose())
-                        temp_loop.close()
-                    except RuntimeError as e:
-                        logger.warning(f"Failed to close Redis cleanly (RuntimeError): {e}")
-                        logger.warning("This usually means an event loop was already running.")
-                    except Exception as e:
-                        logger.error(f"Error closing Redis connection during final shutdown: {e}")
-
-            except Exception as e:
-                logger.error(f"Error during final dashboard shutdown: {e}")
 
 if __name__ == "__main__":
     main() 

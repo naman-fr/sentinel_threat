@@ -55,6 +55,8 @@ class ZeroTrustManager:
         
         # Initialize zero-trust components - will be called by initialize()
         self._initialized = False
+        
+        self._initialize_zero_trust_task = asyncio.create_task(self._initialize_zero_trust())
     
     async def initialize(self):
         """Initialize zero-trust components asynchronously"""
