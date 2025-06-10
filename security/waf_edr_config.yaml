@@ -1,0 +1,248 @@
+# WAF and EDR Configuration
+
+# Web Application Firewall (WAF) Settings
+waf:
+  rules:
+    - name: "SQL Injection Prevention"
+      type: "pattern"
+      patterns:
+        - "(?i)(\\b(and|or)\\b.+?(\\b(select|insert|update|delete|drop|union)\\b))"
+        - "(?i)(\\b(exec|execute|sp_executesql)\\b)"
+        - "(?i)(\\b(load_file|into\\s+outfile|into\\s+dumpfile)\\b)"
+      action: "block"
+      severity: "critical"
+      description: "Prevent SQL injection attacks"
+    
+    - name: "XSS Protection"
+      type: "pattern"
+      patterns:
+        - "(?i)(<script[^>]*>.*?</script>)"
+        - "(?i)(javascript:)"
+        - "(?i)(on\\w+\\s*=)"
+      action: "block"
+      severity: "high"
+      description: "Prevent cross-site scripting attacks"
+    
+    - name: "Path Traversal"
+      type: "pattern"
+      patterns:
+        - "(?i)(\\.\\./|\\.\\.\\\\)"
+        - "(?i)(%2e%2e%2f|%252e%252e%252f)"
+      action: "block"
+      severity: "high"
+      description: "Prevent directory traversal attacks"
+    
+    - name: "Command Injection"
+      type: "pattern"
+      patterns:
+        - "(?i)(\\b(cat|chmod|curl|wget|nc|netcat|bash|sh)\\b)"
+        - "(?i)(\\|\\s*\\b(cat|chmod|curl|wget|nc|netcat|bash|sh)\\b)"
+      action: "block"
+      severity: "critical"
+      description: "Prevent command injection attacks"
+    
+    - name: "File Upload Protection"
+      type: "file"
+      allowed_extensions:
+        - "jpg"
+        - "jpeg"
+        - "png"
+        - "gif"
+        - "pdf"
+        - "doc"
+        - "docx"
+      max_size: 10485760  # 10MB
+      scan_content: true
+      action: "block"
+      severity: "high"
+      description: "Control file uploads and prevent malicious files"
+    
+    - name: "Rate Limiting"
+      type: "rate"
+      requests_per_minute: 100
+      burst: 20
+      action: "throttle"
+      severity: "medium"
+      description: "Prevent brute force and DoS attacks"
+    
+    - name: "API Protection"
+      type: "api"
+      methods:
+        - "GET"
+        - "POST"
+        - "PUT"
+        - "DELETE"
+      require_auth: true
+      validate_json: true
+      max_payload_size: 1048576  # 1MB
+      action: "block"
+      severity: "high"
+      description: "Protect API endpoints"
+
+# Endpoint Detection and Response (EDR) Settings
+edr:
+  monitoring:
+    processes:
+      enabled: true
+      suspicious_patterns:
+        - "cmd.exe /c"
+        - "powershell.exe -enc"
+        - "certutil.exe -urlcache"
+      action: "alert"
+    
+    filesystem:
+      enabled: true
+      watch_paths:
+        - "C:\\Windows\\System32"
+        - "C:\\Program Files"
+        - "C:\\Users"
+      excluded_paths:
+        - "C:\\Windows\\Temp"
+        - "C:\\Users\\*\\AppData\\Local\\Temp"
+      action: "alert"
+    
+    registry:
+      enabled: true
+      watch_keys:
+        - "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run"
+        - "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunOnce"
+        - "HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run"
+      action: "alert"
+    
+    network:
+      enabled: true
+      protocols:
+        - "TCP"
+        - "UDP"
+        - "ICMP"
+      ports:
+        - "20-25"  # FTP, SSH, Telnet
+        - "53"     # DNS
+        - "80-443" # HTTP/HTTPS
+        - "445"    # SMB
+        - "3389"   # RDP
+      action: "alert"
+  
+  detection:
+    malware:
+      signatures:
+        - type: "hash"
+          algorithm: "sha256"
+          database: "malware_hashes.db"
+        - type: "yara"
+          rules: "malware_rules.yar"
+      action: "quarantine"
+    
+    behavior:
+      suspicious_activities:
+        - "process_injection"
+        - "dll_injection"
+        - "registry_persistence"
+        - "scheduled_task_creation"
+        - "service_creation"
+      action: "alert"
+    
+    exploit:
+      vulnerabilities:
+        - "CVE-2021-44228"  # Log4Shell
+        - "CVE-2021-26084"  # Confluence
+        - "CVE-2021-21972"  # vCenter
+      action: "block"
+  
+  response:
+    quarantine:
+      location: "C:\\Quarantine"
+      max_size: 1073741824  # 1GB
+      retention_days: 30
+    
+    isolation:
+      network: true
+      usb: true
+      bluetooth: true
+      action: "isolate"
+    
+    remediation:
+      automatic: true
+      steps:
+        - "kill_suspicious_processes"
+        - "remove_persistence"
+        - "clean_registry"
+        - "restore_files"
+    
+    notification:
+      channels:
+        - type: "email"
+          recipients:
+            - "security@example.com"
+            - "admin@example.com"
+        - type: "slack"
+          webhook: "https://hooks.slack.com/services/xxx"
+          channel: "#security-alerts"
+        - type: "webhook"
+          url: "https://api.example.com/security/incidents"
+      
+      severity_levels:
+        critical:
+          - "email"
+          - "slack"
+          - "webhook"
+        high:
+          - "email"
+          - "slack"
+        medium:
+          - "slack"
+        low:
+          - "webhook"
+
+# Integration Settings
+integration:
+  api:
+    base_url: "https://api.example.com"
+    version: "v1"
+    timeout: 30
+    retries: 3
+    
+  authentication:
+    method: "oauth2"
+    client_id: "your_client_id"
+    client_secret: "your_client_secret"
+    scope:
+      - "waf.read"
+      - "waf.write"
+      - "edr.read"
+      - "edr.write"
+    
+  logging:
+    level: "INFO"
+    format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    handlers:
+      - type: "file"
+        filename: "waf_edr.log"
+        max_size: 10485760  # 10MB
+        backup_count: 5
+      - type: "syslog"
+        address: "/dev/log"
+        facility: "local0"
+    
+  monitoring:
+    metrics:
+      - name: "waf_blocked_requests"
+        type: "counter"
+        labels:
+          - "rule"
+          - "severity"
+      - name: "edr_detected_threats"
+        type: "counter"
+        labels:
+          - "type"
+          - "severity"
+      - name: "response_time"
+        type: "histogram"
+        labels:
+          - "endpoint"
+          - "method"
+    
+    health_checks:
+      interval: 300  # 5 minutes
+      timeout: 30
+      retries: 3 
